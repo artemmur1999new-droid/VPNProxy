@@ -1,20 +1,17 @@
 import socket
 import threading
-import socks
-import socks5serv
+import os
 
-socks5 = "34.84.162.206:38081"
-proxy = "127.0.0.1:10000"
+HOST = "0.0.0.0"
+PORT = int(os.environ.get("PORT", 10000))
 
-proxy_host, proxy_port = proxy.split(":")
-proxy_port = int(proxy_port)
 
 server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-server.bind((proxy_host, proxy_port))
+server.bind((HOST, PORT))
 server.listen(100)
 
-print(f"Proxy listening on {proxy_host}:{proxy_port}")
+print(f"Proxy listening on {HOST}:{PORT}")
 
 
 def relay(src, dst):
@@ -24,45 +21,31 @@ def relay(src, dst):
             if not data:
                 break
             dst.sendall(data)
-    except Exception:
+    except:
         pass
     finally:
-        try:
-            src.shutdown(socket.SHUT_RDWR)
-        except:
-            pass
-
-        try:
-            dst.shutdown(socket.SHUT_RDWR)
-        except:
-            pass
-
-        try:
-            src.close()
-        except:
-            pass
-
-        try:
-            dst.close()
-        except:
-            pass
+        for s in (src, dst):
+            try:
+                s.shutdown(socket.SHUT_RDWR)
+            except:
+                pass
+            try:
+                s.close()
+            except:
+                pass
 
 
 def handle_client(client):
     try:
         request = client.recv(8192)
-
         if not request:
             client.close()
             return
 
-        first_line = request.split(b"\r\n", 1)[0].decode(
-            "utf-8",
-            errors="ignore"
-        )
-
+        first_line = request.split(b"\r\n", 1)[0].decode("utf-8", errors="ignore")
         print(first_line)
 
+        # Только HTTPS CONNECT
         if not first_line.startswith("CONNECT "):
             client.sendall(
                 b"HTTP/1.1 405 Method Not Allowed\r\n"
@@ -80,39 +63,19 @@ def handle_client(client):
             host = target
             port = 443
 
-        socks5_host, socks5_port = socks5.split(":")
-        socks5_port = int(socks5_port)
-
-        remote = socks.socksocket()
-        remote.set_proxy(
-            socks.SOCKS5,
-            socks5_host,
-            socks5_port
-        )
-
-        remote.settimeout(15)
-        remote.connect((host, port))
+        # Подключаемся напрямую (без PySocks!)
+        remote = socket.create_connection((host, port), timeout=15)
 
         client.sendall(
             b"HTTP/1.1 200 Connection Established\r\n"
             b"Proxy-Agent: PythonProxy\r\n\r\n"
         )
 
-        threading.Thread(
-            target=relay,
-            args=(client, remote),
-            daemon=True
-        ).start()
-
-        threading.Thread(
-            target=relay,
-            args=(remote, client),
-            daemon=True
-        ).start()
+        threading.Thread(target=relay, args=(client, remote), daemon=True).start()
+        threading.Thread(target=relay, args=(remote, client), daemon=True).start()
 
     except Exception as e:
         print("Error:", e)
-
         try:
             client.sendall(
                 b"HTTP/1.1 502 Bad Gateway\r\n"
@@ -120,7 +83,6 @@ def handle_client(client):
             )
         except:
             pass
-
         try:
             client.close()
         except:
@@ -129,9 +91,4 @@ def handle_client(client):
 
 while True:
     client, addr = server.accept()
-
-    threading.Thread(
-        target=handle_client,
-        args=(client,),
-        daemon=True
-    ).start()
+    threading.Thread(target=handle_client, args=(client,), daemon=True).start()
