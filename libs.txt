@@ -1,1 +1,1 @@
-pysocks
+asyncio-socks-server
